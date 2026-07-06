@@ -829,6 +829,16 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     id: "openai",
     label: "OpenAI",
     isConfigured: ({ cfg, agentDir }) => {
+      // A provider apiKey supplied directly in config (e.g. a gateway token via
+      // models.providers.openai.apiKey, alongside a custom baseUrl) is a
+      // complete direct-auth credential — the same one generateImage resolves
+      // through resolveApiKeyForProvider. Treat it as configured so image
+      // generation works purely from config, like chat providers, without an
+      // OPENAI_API_KEY env var or an auth profile. Env/profile creds still count
+      // below.
+      if (cfg?.models?.providers?.openai?.apiKey !== undefined) {
+        return true;
+      }
       const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
       const hasPublicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(configuredBaseUrl);
       const hasChatGPTRouteConfig = hasChatGPTImageRouteConfig(cfg);
