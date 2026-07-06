@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **TUI hyperlink parsing:** preserve balanced parentheses in OSC8 link targets while rejecting incomplete or punctuation-suffixed URL fragments. (#100661, #100697) Thanks @ZOOWH.
 - **Agent helper downloads:** bound fd and ripgrep archive downloads and extraction with declared and streamed byte caps, extraction limits, timeouts, traversal-safe unpacking, and partial-file cleanup. (#98988) Thanks @LeonidasLux.
 - **OpenAI Realtime Codex auth:** reuse external Codex OAuth profiles for Realtime voice sessions when no explicit OpenAI API key is configured.
 - **OpenAI-compatible TTS voice notes:** route configured MP3 speech output through native voice-message delivery when the channel supports it, while keeping WAV output on the audio-file path. (#83227, #80317) Thanks @HemantSudarshan.
