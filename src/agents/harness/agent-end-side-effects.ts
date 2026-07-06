@@ -13,12 +13,18 @@ import {
 const log = createSubsystemLogger("agents/harness");
 
 type AgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+type CoreAgentEndSideEffectsParams = AgentEndSideEffectsParams & {
+  currentTurnMessages?: unknown[];
+};
 
-async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
+async function runCoreAgentEndSideEffects(params: CoreAgentEndSideEffectsParams): Promise<void> {
   try {
     const { runSkillResearchAutoCapture } = await import("../../skills/research/autocapture.js");
     await runSkillResearchAutoCapture({
       event: params.event,
+      // External SDK callers predate current-turn provenance; preserve their prior event-based
+      // behavior while built-in runtimes pass the exact current turn.
+      currentTurnMessages: params.currentTurnMessages ?? params.event.messages,
       ctx: params.ctx,
       ...(params.ctx.config ? { config: params.ctx.config } : {}),
     });
@@ -29,13 +35,23 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
 }
 
 /** Starts agent-end side effects without waiting for completion. */
-export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void {
+export function runAgentEndSideEffects(params: CoreAgentEndSideEffectsParams): void {
   void runCoreAgentEndSideEffects(params);
-  runAgentHarnessAgentEndHook(params);
+  runAgentHarnessAgentEndHook({
+    event: params.event,
+    ctx: params.ctx,
+    hookRunner: params.hookRunner,
+  });
 }
 
 /** Runs agent-end side effects and waits for plugin/core completion. */
-export async function awaitAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
+export async function awaitAgentEndSideEffects(
+  params: CoreAgentEndSideEffectsParams,
+): Promise<void> {
   await runCoreAgentEndSideEffects(params);
-  await awaitAgentHarnessAgentEndHook(params);
+  await awaitAgentHarnessAgentEndHook({
+    event: params.event,
+    ctx: params.ctx,
+    hookRunner: params.hookRunner,
+  });
 }

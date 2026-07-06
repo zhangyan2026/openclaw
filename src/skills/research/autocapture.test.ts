@@ -1,7 +1,7 @@
 // Research autocapture tests cover capture policy, persistence, and config gating.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
 import {
@@ -13,14 +13,19 @@ import {
   applySkillProposal,
   inspectSkillProposal,
   listSkillProposals,
+  proposeCreateSkill,
+  rejectSkillProposal,
 } from "../workshop/service.js";
+import * as workshopService from "../workshop/service.js";
 import { runSkillResearchAutoCapture } from "./autocapture.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 const SESSION_KEY = "agent:main:main";
+let runSequence = 0;
 
 beforeEach(async () => {
+  runSequence = 0;
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-workshop-state-",
@@ -28,6 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -47,12 +53,29 @@ function readSession(sessionKey = SESSION_KEY) {
   return loadSessionEntry({ agentId: "main", sessionKey, readConsistency: "latest" });
 }
 
+type AutoCaptureParams = Parameters<typeof runSkillResearchAutoCapture>[0];
+
+async function runAutoCapture(
+  params: Omit<AutoCaptureParams, "currentTurnMessages"> & {
+    currentTurnMessages?: unknown[];
+  },
+): Promise<void> {
+  await runSkillResearchAutoCapture({
+    ...params,
+    currentTurnMessages: params.currentTurnMessages ?? params.event.messages,
+    ctx: {
+      ...params.ctx,
+      runId: params.ctx.runId ?? `run-${++runSequence}`,
+    },
+  });
+}
+
 describe("skill research auto-capture", () => {
-  it("queues a pending proposal from durable user correction", async () => {
+  it("deduplicates pending proposals for the same durable correction", async () => {
     const workspaceDir = await makeWorkspace();
     await seedSession();
 
-    await runSkillResearchAutoCapture({
+    const captureParams = {
       event: {
         success: true,
         messages: [
@@ -73,7 +96,9 @@ describe("skill research auto-capture", () => {
           },
         },
       },
-    });
+    };
+    await runAutoCapture(captureParams);
+    await runAutoCapture(captureParams);
 
     const proposals = await listSkillProposals({ workspaceDir });
     expect(proposals.proposals).toHaveLength(1);
@@ -93,7 +118,7 @@ describe("skill research auto-capture", () => {
     const workspaceDir = await makeWorkspace();
     await seedSession();
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: true,
         messages: [
@@ -124,7 +149,7 @@ describe("skill research auto-capture", () => {
     });
     expect(second?.suggestion).toBeUndefined();
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: true,
         messages: [
@@ -143,7 +168,7 @@ describe("skill research auto-capture", () => {
     const workspaceDir = await makeWorkspace();
     await seedSession();
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: true,
         messages: [{ role: "user", content: "Please review this pull request." }],
@@ -158,7 +183,7 @@ describe("skill research auto-capture", () => {
     const workspaceDir = await makeWorkspace();
     await seedSession();
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: false,
         messages: [
@@ -188,12 +213,12 @@ describe("skill research auto-capture", () => {
       ],
     };
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event,
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
       config: { skills: { workshop: { autonomous: { enabled: true } } } },
     });
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event,
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
     });
@@ -240,7 +265,7 @@ describe("skill research auto-capture", () => {
     const sessionKey = ctx.sessionKey ?? SESSION_KEY;
     await seedSession(sessionKey);
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: true,
         messages: [
@@ -279,7 +304,7 @@ describe("skill research auto-capture", () => {
       "utf8",
     );
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: true,
         messages: [
@@ -312,10 +337,12 @@ describe("skill research auto-capture", () => {
 
     await applySkillProposal({ workspaceDir, proposalId: proposals.proposals[0].id });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
+    expect(updatedSkill).toContain('description: "Existing GitHub PR workflow."');
+    expect(updatedSkill).not.toContain("Reusable workflow notes");
     expect(updatedSkill).toContain("Preserve this original review checklist.");
     expect(updatedSkill).toContain("always check CI before final response");
 
-    await runSkillResearchAutoCapture({
+    await runAutoCapture({
       event: {
         success: true,
         messages: [
@@ -329,5 +356,492 @@ describe("skill research auto-capture", () => {
       ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
     });
     expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+  });
+
+  it("queues a proposal from a reactive correction, not just prospective phrasing", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "You're still using the transcripts as tone references — they should not be included as voice material at all.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    expect(proposals.proposals[0]).toMatchObject({
+      kind: "create",
+      status: "pending",
+      skillKey: "learned-workflows",
+    });
+    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    expect(proposal?.content).toContain("should not be included as voice material");
+  });
+
+  it("routes a correction to the existing workspace skill it is about", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillFile = path.join(workspaceDir, "skills", "signal-scout", "SKILL.md");
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(
+      skillFile,
+      [
+        "---",
+        'name: "signal-scout"',
+        'description: "Mine the market for signals and validate them before drafting."',
+        "---",
+        "",
+        "# Signal Scout",
+        "",
+        "- Capture first, score later.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "I thought we were working on listening — capture real market signals with quoted evidence before scoring anything.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    expect(proposals.proposals[0]).toMatchObject({
+      kind: "update",
+      status: "pending",
+      skillKey: "signal-scout",
+    });
+
+    await applySkillProposal({ workspaceDir, proposalId: proposals.proposals[0].id });
+    const updatedSkill = await fs.readFile(skillFile, "utf8");
+    expect(updatedSkill).toContain("Capture first, score later.");
+    expect(updatedSkill).toContain("capture real market signals with quoted evidence");
+  });
+
+  it("routes a correction to a writable project agent skill under .agents/skills", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillFile = path.join(workspaceDir, ".agents", "skills", "signal-scout", "SKILL.md");
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(
+      skillFile,
+      [
+        "---",
+        'name: "Signal Scout"',
+        'description: "Mine the market for signals and validate them before drafting."',
+        "---",
+        "",
+        "# Signal Scout",
+        "",
+        "- Capture first, score later.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "I thought we were working on listening — capture real market signals with quoted evidence before scoring anything.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    expect(proposals.proposals[0]).toMatchObject({
+      kind: "update",
+      status: "pending",
+      skillKey: "Signal Scout",
+    });
+
+    await applySkillProposal({ workspaceDir, proposalId: proposals.proposals[0].id });
+    const updatedSkill = await fs.readFile(skillFile, "utf8");
+    expect(updatedSkill).toContain("Capture first, score later.");
+    expect(updatedSkill).toContain("capture real market signals with quoted evidence");
+  });
+
+  it("captures corrections from failed runs", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runAutoCapture({
+      event: {
+        success: false,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    expect(proposals.proposals[0]).toMatchObject({
+      kind: "create",
+      status: "pending",
+      skillKey: "github-pr-workflow",
+    });
+  });
+
+  it("preserves autonomous capture for callers without a run id", async () => {
+    const workspaceDir = await makeWorkspace();
+    const event = {
+      success: true,
+      messages: [
+        {
+          role: "user",
+          content:
+            "From now on, when working on GitHub PRs, always check CI before final response.",
+        },
+      ],
+    };
+
+    await runSkillResearchAutoCapture({
+      event,
+      currentTurnMessages: event.messages,
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(1);
+  });
+
+  it("queues one proposal per distinct topic when a session has several corrections", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+          {
+            role: "user",
+            content: "Remember to always optimize screenshot assets before attaching them.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    const skillKeys = proposals.proposals.map((entry) => entry.skillKey).toSorted();
+    expect(skillKeys).toEqual(["github-pr-workflow", "screenshot-asset-workflow"]);
+  });
+
+  it("revises its pending proposal when a later turn adds another correction", async () => {
+    const workspaceDir = await makeWorkspace();
+    const config = {
+      skills: { workshop: { autonomous: { enabled: true } } },
+    };
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config,
+    });
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Next time on a GitHub PR, make sure to link the issue in the description.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config,
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    expect(proposal?.record).toMatchObject({
+      createdBy: "skill-autocapture",
+      proposedVersion: "v2",
+    });
+    expect(proposal?.content).toContain("always check CI");
+    expect(proposal?.content).toContain("link the issue");
+  });
+
+  it("does not revise a manually created pending proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const manual = await proposeCreateSkill({
+      workspaceDir,
+      name: "github-pr-workflow",
+      description: "Manual GitHub workflow proposal.",
+      content: "# Manual proposal\n\n- Keep this draft separate.\n",
+      createdBy: "skill-workshop",
+    });
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(2);
+    const unchanged = await inspectSkillProposal(manual.record.id, { workspaceDir });
+    expect(unchanged?.record.proposedVersion).toBe("v1");
+    expect(unchanged?.content).toContain("Keep this draft separate");
+  });
+
+  it("suppresses capture when the same run already created a workshop proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const runId = "learn-run";
+    await proposeCreateSkill({
+      workspaceDir,
+      name: "curated-learn-proposal",
+      description: "Curated /learn result.",
+      content: "# Curated proposal\n",
+      createdBy: "skill-workshop",
+      origin: { runId },
+    });
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "Stop using transcripts as tone references; only use them as factual evidence.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", runId },
+      config: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(1);
+  });
+
+  it("suppresses a suggestion when the same run already created a workshop proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const runId = "learn-suggestion-run";
+    await seedSession();
+    await proposeCreateSkill({
+      workspaceDir,
+      name: "curated-learn-proposal",
+      description: "Curated /learn result.",
+      content: "# Curated proposal\n",
+      createdBy: "skill-workshop",
+      origin: { runId },
+    });
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "Stop using transcripts as tone references; only use them as factual evidence.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        runId,
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(1);
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+  });
+
+  it.each(["applied", "rejected"] as const)(
+    "does not replay historical corrections after a proposal is %s",
+    async (status) => {
+      const workspaceDir = await makeWorkspace();
+      const correction =
+        "From now on, when working on GitHub PRs, always check CI before final response.";
+      const config = {
+        skills: { workshop: { autonomous: { enabled: true } } },
+      };
+
+      await runAutoCapture({
+        event: { success: true, messages: [{ role: "user", content: correction }] },
+        ctx: { workspaceDir, agentId: "main" },
+        config,
+      });
+      const first = (await listSkillProposals({ workspaceDir })).proposals[0];
+      if (status === "applied") {
+        await applySkillProposal({ workspaceDir, proposalId: first.id });
+      } else {
+        await rejectSkillProposal({ workspaceDir, proposalId: first.id });
+      }
+
+      const currentTurn = {
+        role: "user",
+        content: "What is the current status of the implementation?",
+      };
+      await runAutoCapture({
+        event: {
+          success: true,
+          messages: [{ role: "user", content: correction }, currentTurn],
+        },
+        currentTurnMessages: [currentTurn],
+        ctx: { workspaceDir, agentId: "main" },
+        config,
+      });
+
+      const proposals = await listSkillProposals({ workspaceDir });
+      expect(proposals.proposals).toHaveLength(1);
+      expect(proposals.proposals[0].status).toBe(status);
+    },
+  );
+
+  it("captures only new current-turn corrections from a failed run", async () => {
+    const workspaceDir = await makeWorkspace();
+    const historical = {
+      role: "user",
+      content: "Remember to always optimize screenshot assets before attaching them.",
+    };
+    const current = {
+      role: "user",
+      content: "Next time on a GitHub PR, make sure to link the issue in the description.",
+    };
+
+    await runAutoCapture({
+      event: { success: false, messages: [historical, current] },
+      currentTurnMessages: [current],
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    expect(proposals.proposals[0].skillKey).toBe("github-pr-workflow");
+    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    expect(proposal?.content).toContain("link the issue");
+    expect(proposal?.content).not.toContain("screenshot assets");
+  });
+
+  it("does not discover workspace skills on a signal-free turn", async () => {
+    const workspaceDir = await makeWorkspace();
+    const discovery = vi.spyOn(workshopService, "listWritableWorkspaceSkillSummaries");
+
+    await runAutoCapture({
+      event: {
+        success: true,
+        messages: [{ role: "user", content: "What is the current status?" }],
+      },
+      ctx: { workspaceDir, agentId: "main" },
+      config: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+      },
+    });
+
+    expect(discovery).not.toHaveBeenCalled();
   });
 });

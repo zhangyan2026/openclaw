@@ -85,14 +85,34 @@ export async function listSkillProposals(
   if (!options.workspaceDir) {
     return manifest;
   }
-  const proposals: SkillProposalManifest["proposals"] = [];
+  const records = await readScopedSkillProposalRecords(manifest, options.workspaceDir);
+  const includedIds = new Set(records.map((record) => record.id));
+  return {
+    ...manifest,
+    proposals: manifest.proposals.filter((proposal) => includedIds.has(proposal.id)),
+  };
+}
+
+/** Lists full proposal records, optionally scoped to a workspace. */
+export async function listSkillProposalRecords(
+  options: SkillProposalScopeOptions = {},
+): Promise<SkillProposalRecord[]> {
+  const manifest = await readSkillProposalManifest();
+  return await readScopedSkillProposalRecords(manifest, options.workspaceDir);
+}
+
+async function readScopedSkillProposalRecords(
+  manifest: SkillProposalManifest,
+  workspaceDir?: string,
+): Promise<SkillProposalRecord[]> {
+  const proposals: SkillProposalRecord[] = [];
   for (const proposal of manifest.proposals) {
     const record = await readSkillProposalRecord(proposal.id);
-    if (record && isProposalInWorkspace(record, options.workspaceDir)) {
-      proposals.push(proposal);
+    if (record && (!workspaceDir || isProposalInWorkspace(record, workspaceDir))) {
+      proposals.push(record);
     }
   }
-  return { ...manifest, proposals };
+  return proposals;
 }
 
 export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
@@ -302,6 +322,40 @@ export async function proposeCreateSkill(
     },
   });
   return { record, content: proposalContent };
+}
+
+/** Summary of a workspace skill the workshop is allowed to write. */
+export type WritableWorkspaceSkillSummary = {
+  name: string;
+  description?: string;
+  filePath: string;
+};
+
+/**
+ * Lists the workspace skills the workshop can target with update proposals, using the same
+ * status discovery as `proposeUpdateSkill` so callers that route corrections to existing
+ * skills stay in lockstep with what an update can actually write.
+ */
+export function listWritableWorkspaceSkillSummaries(
+  workspaceDir: string,
+  opts?: { config?: OpenClawConfig; agentId?: string },
+): WritableWorkspaceSkillSummary[] {
+  const status = buildWorkspaceSkillStatus(workspaceDir, {
+    config: opts?.config,
+    agentId: opts?.agentId,
+  });
+  const summaries: WritableWorkspaceSkillSummary[] = [];
+  for (const skill of status.skills) {
+    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
+      continue;
+    }
+    summaries.push(
+      skill.description
+        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
+        : { name: skill.skillKey, filePath: skill.filePath },
+    );
+  }
+  return summaries;
 }
 
 export async function proposeUpdateSkill(

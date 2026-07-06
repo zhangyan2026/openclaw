@@ -230,11 +230,19 @@ proposals directly instead.
 
 | Setting                    | Default     | Effect                                                                                                                                                                 |
 | -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Lets OpenClaw create pending proposals from durable conversation signals after a successful turn.                                                                      |
+| `autonomous.enabled`       | `false`     | Captures durable current-turn corrections as pending proposals.                                                                                                        |
 | `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
 | `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
 | `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
 | `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+
+Autonomous capture runs after successful and failed turns. It recognizes
+prospective rules ("from now on…") and reactive corrections ("that's not what I
+asked"), groups them per topic (up to 3 proposals per turn), routes them to
+matching writable workspace skills, and revises its own pending proposal when a
+later turn adds another correction. Signal-free turns skip skill discovery. A
+turn that already created a workshop proposal, such as `/learn`, is not captured
+again.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.

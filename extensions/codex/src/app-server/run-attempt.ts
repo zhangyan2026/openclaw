@@ -33,6 +33,7 @@ import {
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
+  type AgentMessage,
   type FastModeAutoProgressState,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -263,6 +264,7 @@ import {
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
 import {
+  buildResolvedCodexUserPromptMessage,
   buildCodexUserPromptMessage,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
@@ -415,8 +417,15 @@ async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
   hookParams: CodexAgentEndHookParams,
 ): Promise<void> {
+  let currentTurnMessage: AgentMessage;
+  try {
+    currentTurnMessage = await buildResolvedCodexUserPromptMessage(params);
+  } catch {
+    currentTurnMessage = buildCodexUserPromptMessage(params);
+  }
   const sideEffectParams = {
     ...hookParams,
+    currentTurnMessages: [currentTurnMessage],
     ctx: { ...hookParams.ctx, config: params.config },
   };
   if (shouldAwaitCodexAgentEndHook(params)) {

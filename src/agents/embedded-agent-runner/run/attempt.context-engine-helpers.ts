@@ -25,6 +25,23 @@ type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> =
   contextFiles: TContextFile[];
 };
 
+/** Captures the user-owned turn before compaction can rewrite transcript indexes. */
+export function buildAutoCaptureCurrentTurnMessages(params: {
+  prompt: string;
+  preparedUserTurnMessage?: Extract<AgentMessage, { role: "user" }>;
+}): AgentMessage[] {
+  if (params.preparedUserTurnMessage) {
+    return [params.preparedUserTurnMessage];
+  }
+  return [
+    {
+      role: "user",
+      content: [{ type: "text", text: params.prompt }],
+      timestamp: Date.now(),
+    },
+  ];
+}
+
 /**
  * Resolves bootstrap/context files for this attempt and reports whether the
  * caller should persist a completed bootstrap marker. Continuation-skip mode

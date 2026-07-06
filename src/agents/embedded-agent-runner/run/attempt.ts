@@ -378,6 +378,7 @@ import {
 import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
 import {
   assembleAttemptContextEngine,
+  buildAutoCaptureCurrentTurnMessages,
   buildLoopPromptCacheInfo,
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
@@ -2161,6 +2162,10 @@ export async function runEmbeddedAttempt(
 
       await prewarmSessionFile(params.sessionFile);
       const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      const currentTurnMessages = buildAutoCaptureCurrentTurnMessages({
+        prompt: params.prompt,
+        preparedUserTurnMessage,
+      });
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -5336,6 +5341,7 @@ export async function runEmbeddedAttempt(
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
             },
+            currentTurnMessages,
             ctx: {
               runId: params.runId,
               trace: freezeDiagnosticTraceContext(diagnosticTrace),

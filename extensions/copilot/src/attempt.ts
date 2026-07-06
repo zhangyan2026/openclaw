@@ -227,6 +227,7 @@ async function finalizeCopilotAttempt(
           : {}),
       durationMs: now() - attemptStartedAt,
     },
+    currentTurnMessages: buildCopilotAutoCaptureCurrentTurnMessages(params, now),
     ctx,
   });
   return result;
@@ -1543,6 +1544,22 @@ function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
 
 function getMessagesSnapshotInput(params: AttemptParamsLike): AgentMessage[] {
   return Array.isArray(params.messages) ? [...params.messages] : [];
+}
+
+function buildCopilotAutoCaptureCurrentTurnMessages(
+  params: AttemptParamsLike,
+  now: () => number,
+): AgentMessage[] {
+  const messages = getMessagesSnapshotInput(params);
+  const userText = readString(params.transcriptPrompt) ?? readString(params.prompt);
+  if (!userText) {
+    return [];
+  }
+  const tail = messages.at(-1);
+  if (tail?.role === "user" && readTailUserText(messages) === userText) {
+    return [tail];
+  }
+  return [{ role: "user", content: userText, timestamp: now() } as AgentMessage];
 }
 
 // Returns the trimmed plain-text content of the tail user message in

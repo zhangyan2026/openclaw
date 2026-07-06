@@ -2559,6 +2559,12 @@ describe("runCliAgent reliability", () => {
     expect(resolved).toBe(false);
     expect(mockAutoCapture).toHaveBeenCalledWith(
       expect.objectContaining({
+        currentTurnMessages: [
+          expect.objectContaining({
+            role: "user",
+            content: context.params.prompt,
+          }),
+        ],
         ctx: expect.objectContaining({
           agentId: "main",
           sessionKey: "agent:main:main",

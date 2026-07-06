@@ -42,6 +42,7 @@ describe("agent end side effects", () => {
         messages: [],
         success: true,
       },
+      currentTurnMessages: [],
       ctx: {
         runId: "run-1",
         sessionKey: "agent:main:main",
@@ -66,6 +67,7 @@ describe("agent end side effects", () => {
           messages: [],
           success: true,
         },
+        currentTurnMessages: [],
         ctx: {
           runId: "run-1",
           sessionKey: "agent:main:main",
@@ -98,12 +100,13 @@ describe("agent end side effects", () => {
 
   it("still runs agent_end hooks when Skill Research auto-capture fails", async () => {
     mockAutoCapture.mockRejectedValueOnce(new Error("capture failed"));
+    const legacyMessages = [{ role: "user", content: "Remember this workflow." }];
 
     // Awaiting callers still get hook completion even when optional research
     // capture rejects.
     await awaitAgentEndSideEffects({
       event: {
-        messages: [],
+        messages: legacyMessages,
         success: true,
       },
       ctx: {
@@ -114,9 +117,10 @@ describe("agent end side effects", () => {
 
     expect(mockAutoCapture).toHaveBeenCalledWith({
       event: {
-        messages: [],
+        messages: legacyMessages,
         success: true,
       },
+      currentTurnMessages: legacyMessages,
       ctx: {
         runId: "run-1",
         workspaceDir: "/workspace",

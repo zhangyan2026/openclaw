@@ -21,6 +21,7 @@ import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   type AttemptContextEngine,
+  buildAutoCaptureCurrentTurnMessages,
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
   buildContextEnginePromptCacheInfo,
@@ -2762,6 +2763,27 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   it("omits prompt-cache metadata when no cache data is available", () => {
     expect(buildContextEnginePromptCacheInfo({})).toBeUndefined();
+  });
+
+  it("captures the current user turn without relying on transcript indexes", () => {
+    const prepared = {
+      role: "user",
+      content: [{ type: "text", text: "Stop using stale transcript corrections." }],
+      timestamp: 123,
+    } as Extract<AgentMessage, { role: "user" }>;
+
+    expect(
+      buildAutoCaptureCurrentTurnMessages({
+        prompt: "model prompt",
+        preparedUserTurnMessage: prepared,
+      }),
+    ).toEqual([prepared]);
+    expect(buildAutoCaptureCurrentTurnMessages({ prompt: "raw correction" })).toMatchObject([
+      {
+        role: "user",
+        content: [{ type: "text", text: "raw correction" }],
+      },
+    ]);
   });
 
   it("does not reuse a prior turn's usage when the current attempt has no assistant", () => {

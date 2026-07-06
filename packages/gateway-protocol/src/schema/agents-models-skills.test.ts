@@ -110,7 +110,7 @@ describe("SkillsProposalInspectResultSchema", () => {
         schema: "openclaw.skill-workshop.proposal.v1",
         createdAt: "2026-05-30T00:00:00.000Z",
         updatedAt: "2026-05-30T00:00:00.000Z",
-        createdBy: "skill-workshop",
+        createdBy: "skill-autocapture",
         proposedVersion: "v1",
         draftFile: "PROPOSAL.md",
         target: {

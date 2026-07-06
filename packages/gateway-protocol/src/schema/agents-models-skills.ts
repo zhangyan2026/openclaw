@@ -576,6 +576,7 @@ const SkillProposalScanStateSchema = Type.Union([
 /** Source that created the skill proposal record. */
 const SkillProposalSourceSchema = Type.Union([
   Type.Literal("skill-workshop"),
+  Type.Literal("skill-autocapture"),
   Type.Literal("cli"),
   Type.Literal("gateway"),
 ]);

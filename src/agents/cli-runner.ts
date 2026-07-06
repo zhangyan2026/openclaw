@@ -248,13 +248,18 @@ function shouldAwaitCliAgentEndHook(params: RunCliAgentParams): boolean {
 
 async function runCliAgentEndHook(
   params: RunCliAgentParams,
-  hookParams: CliAgentEndHookParams,
+  hookParams: Omit<CliAgentEndHookParams, "currentTurnMessages">,
 ): Promise<void> {
+  // The hook event includes session history; auto-capture must only inspect this run's prompt.
+  const sideEffectParams = {
+    ...hookParams,
+    currentTurnMessages: [buildCliHookUserMessage(params.prompt)],
+  };
   if (shouldAwaitCliAgentEndHook(params)) {
-    await awaitAgentEndSideEffects(hookParams);
+    await awaitAgentEndSideEffects(sideEffectParams);
     return;
   }
-  runAgentEndSideEffects(hookParams);
+  runAgentEndSideEffects(sideEffectParams);
 }
 
 async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<boolean> {
